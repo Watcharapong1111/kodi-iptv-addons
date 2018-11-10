@@ -24,18 +24,27 @@ from iptvlib.models import *
 
 
 class Stalker(Api):
+    mac = None  # type: str
+    timezone = None  # type: str
     hostname = None  # type: str
     use_origin_icons = None  # type: bool
     adult = None  # type: bool
     timeshift = None  # type: int
     _open_epg_cids = None  # type: list[str]
 
-    def __init__(self, hostname, timeshift, adult, **kwargs):
+    def __init__(self, mac, timezone, hostname, timeshift, adult, **kwargs):
         super(Stalker, self).__init__(**kwargs)
+        self.mac = mac
+        self.timezone = timezone
         self.hostname = hostname
         self.timeshift = timeshift
         self.adult = adult
         Model.API = self
+
+    @property
+    def user_agent(self):
+        return "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) " \
+               "MAG200 stbapp ver: 2 rev: 250 Safari/533.3 "
 
     @property
     def base_api_url(self):
@@ -43,7 +52,7 @@ class Stalker(Api):
 
     @property
     def base_icon_url(self):
-        return "%s"
+        return "http://%s/stalker_portal/misc/logos/320/%%s" % self.host
 
     @property
     def host(self):
@@ -60,67 +69,162 @@ class Stalker(Api):
     def get_cookie(self):
         return ""
 
-    def default_headers(self, headers=None):
+    def default_headers(self, headers=None, force_login=True):
         headers = headers or {}
-        cookie = self.read_cookie_file()
-        if cookie == "":
+        token = self.read_cookie_file()
+        if token == "" and force_login is True:
             self.login()
             return self.default_headers(headers)
-        elif self.auth_status == Api.AUTH_STATUS_NONE:
-            self.auth_status = Api.AUTH_STATUS_OK
-        headers["Authorization"] = cookie
-        headers["Accept"] = "application/json"
-        headers["Accept-Language"] = "ru-RU"
+        if token:
+            headers["Authorization"] = token
+        headers["Accept"] = "*/*"
+        headers["Referer"] = "http://%s/stalker_portal/c/"
+        headers["Accept-Charset"] = "UTF-8,*;q=0.8."
+        headers["Cookie"] = "mac=%s; stb_lang=en; timezone=%s" % (self.mac, self.timezone)
         return headers
-
-    def get_token_type(self, response):
-        token_type = response.get("token_type", "Bearer")
-        return token_type[0].upper() + token_type[1:]
 
     def is_login_request(self, uri, payload=None, method=None, headers=None):
         return "auth/token.php" in uri
 
     def login(self):
+        self.handshake()
+        profile = self.get_profile()
+        status = int(profile.get("status", 1))
+        if status == 2:
+            if not self.do_auth():
+                raise ApiException("Authorization failed", Api.E_API_ERROR)
+            profile.update(self.get_profile(1))
+            self.auth_status = self.AUTH_STATUS_OK
+        elif status == 0:
+            self.auth_status = self.AUTH_STATUS_OK
+        else:
+            raise ApiException("Authorization failed", Api.E_API_ERROR)
+
+        self.write_settings_file(profile)
+
+    def handshake(self):
+        # type: () -> str
+        self.write_cookie_file("")
         payload = {
-            "grant_type": "password",
-            "username": self.username,
+            "type": "stb",
+            "action": "handshake"
+        }
+        request = self.prepare_request("server/load.php", payload, headers=self.default_headers(force_login=False))
+        response = self.send_request(request)
+        is_error, error = Api.is_error_response(response)
+        if is_error:
+            raise ApiException(error.get("message"), error.get("code"))
+        token = response["js"]["token"]
+        self.write_cookie_file("Bearer %s" % (token,))
+        return token
+
+    def get_profile(self, auth_second_step=0):
+        # type: (int) -> dict
+        payload = {
+            "type": "stb",
+            "action": "get_profile",
+            "stb_type": "MAG250",
+            "sn": "0000000000000",
+            "ver": "ImageDescription: 0.2.16-250; "
+                   "ImageDate: 18 Mar 2013 19:56:53 GMT+0200; "
+                   "PORTAL version: 4.9.9; "
+                   "API Version: JS API version: 328; "
+                   "STB API version: 134; "
+                   "Player Engine version: 0x566",
+            "not_valid_token": 0,
+            "auth_second_step": auth_second_step,
+            "hd": 1,
+            "num_banks": 1,
+            "image_version": 216,
+            "hw_version": "1.7-BD-00"
+        }
+        request = self.prepare_request("server/load.php", payload, headers=self.default_headers(force_login=False))
+        response = self.send_request(request)
+        is_error, error = Api.is_error_response(response)
+        if is_error:
+            raise ApiException(error.get("message"), error.get("code"))
+        return response["js"]
+
+    def do_auth(self):
+        # type: () -> bool
+        payload = {
+            "type": "stb",
+            "action": "do_auth",
+            "login": self.username,
             "password": self.password
         }
-        response = self.make_request("auth/token.php", payload, method="POST")
+        request = self.prepare_request("server/load.php", payload, "POST",
+                                       headers=self.default_headers(force_login=False))
+        response = self.send_request(request)
         is_error, error = Api.is_error_response(response)
         if is_error:
             raise ApiException(error.get("message"), error.get("code"))
-        if "error" in response:
-            raise ApiException(
-                response.get("error_description", get_string(TEXT_SERVICE_ERROR_OCCURRED_ID)),
-                Api.E_API_ERROR
-            )
+        return response["js"]
 
-        self.auth_status = self.AUTH_STATUS_OK
-        token_type = self.get_token_type(response)
-        self.write_cookie_file("%s %s" % (token_type, response.get("access_token", "Unknown")))
-        self.write_settings_file(response)
+    def get_genres(self):
+        payload = {
+            "type": "itv",
+            "action": "get_genres",
+        }
+        request = self.prepare_request("server/load.php", payload, headers=self.default_headers())
+        response = self.send_request(request)
+        is_error, error = Api.is_error_response(response)
+        if is_error:
+            raise ApiException(error.get("message"), error.get("code"))
+        if "js" not in response:
+            raise ApiException(response, Api.E_API_ERROR)
+        return response["js"]
 
-        return response
+    def get_channels(self):
+        # type: () -> list
+        payload = {
+            "type": "itv",
+            "action": "get_all_channels",
+        }
+        request = self.prepare_request("server/load.php", payload, headers=self.default_headers())
+        response = self.send_request(request)
+        is_error, error = Api.is_error_response(response)
+        if is_error:
+            raise ApiException(error.get("message"), error.get("code"))
+        if "js" not in response:
+            raise ApiException(response, Api.E_API_ERROR)
+        return response["js"]["data"]
+
+    def get_epg_info(self):
+        payload = {
+            "type": "epg",
+            "action": "get_simple_data_table",
+        }
+        request = self.prepare_request("server/load.php", payload, headers=self.default_headers())
+        response = self.send_request(request)
+        is_error, error = Api.is_error_response(response)
+        if is_error:
+            raise ApiException(error.get("message"), error.get("code"))
+        if "js" not in response:
+            raise ApiException(response, Api.E_API_ERROR)
+        return response["js"]["data"]
+
+    def create_link(self, cmd):
+        payload = {
+            "type": "itv",
+            "action": "create_link",
+            "cmd": cmd
+        }
+        request = self.prepare_request("server/load.php", payload, headers=self.default_headers())
+        response = self.send_request(request)
+        is_error, error = Api.is_error_response(response)
+        if is_error:
+            raise ApiException(error.get("message"), error.get("code"))
+        if "js" not in response:
+            raise ApiException(response, Api.E_API_ERROR)
+        url = response["js"]["cmd"]
+        return url.replace("ffmpeg ", "").split()[0]
+
+
 
     def get_groups(self):
-        settings = self.read_settings_file()
-        if not settings:
-            self.login()
-            return self.get_groups()
-        uri = "api/api_v2.php?_resource=users/%s/tv-genres" % settings.get("user_id")
-        response = self.make_request(uri, headers=self.default_headers())
-        is_error, error = Api.is_error_response(response)
-        if is_error:
-            raise ApiException(error.get("message"), error.get("code"))
-        if "error" in response:
-            raise ApiException(
-                response.get("error_description", get_string(TEXT_SERVICE_ERROR_OCCURRED_ID)),
-                Api.E_API_ERROR
-            )
-
         groups = OrderedDict()
-        for group_data in response.get("results"):
+        for group_data in self.get_genres():
             if all(k in group_data for k in ("id", "title", "censored", "number")) is False:
                 continue
             groups[str(group_data["id"])] = Group(
@@ -132,48 +236,25 @@ class Stalker(Api):
 
         channels = self.get_channels()
         for channel_data in channels:
-            if self.adult is False and bool(channel_data.get("censored", False)) is True:
+            if self.adult is False and bool(int(channel_data.get("censored", 0))) is True:
                 continue
             channel = Channel(
                 cid=str(channel_data["id"]),
-                gid=str(channel_data["genre_id"]),
+                gid=str(channel_data["tv_genre_id"]),
                 name=channel_data["name"],
                 icon=self.base_icon_url % channel_data["logo"],
                 epg=True,
                 archive=bool(channel_data.get("archive", 0)),
                 protected=bool(channel_data.get("censored", False)),
-                url=channel_data["url"]
+                url=channel_data["cmd"]
             )
             groups[channel.gid].channels[channel.cid] = channel
         return groups
 
-    def get_channels(self):
-        # type: () -> list
-        settings = self.read_settings_file()
-        if not settings:
-            self.login()
-            return self.get_channels()
-        uri = "api/api_v2.php?_resource=users/%s/tv-channels" % settings.get("user_id")
-        response = self.make_request(uri, headers=self.default_headers())
-        is_error, error = Api.is_error_response(response)
-        if is_error:
-            raise ApiException(error.get("message"), error.get("code"))
-        if "error" in response:
-            raise ApiException(
-                response.get("error_description", get_string(TEXT_SERVICE_ERROR_OCCURRED_ID)),
-                Api.E_API_ERROR
-            )
-        return response.get("results")
-
     def get_stream_url(self, cid, ut_start=None):
-        settings = self.read_settings_file()
-        if not settings:
-            self.login()
-            return self.get_stream_url(cid, ut_start)
-
         channel = self.channels[cid]
         if ut_start is None:
-            return channel.url
+            return self.create_link(channel.url)
 
         ut_start = int(ut_start) - (HOUR * self.timeshift)
         program = None  # type: Program

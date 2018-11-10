@@ -23,13 +23,21 @@ msgid "Advanced"
 msgstr "Advanced"
 
 msgctxt "#30005"
+msgid "MAC Address"
+msgstr "MAC Address"
+
+msgctxt "#30006"
 msgid "Portal hostname"
 msgstr "Portal hostname"
 
-msgctxt "#30006"
+msgctxt "#30007"
 msgid "Show adult channels"
 msgstr "Show adult channels"
 
-msgctxt "#30007"
+msgctxt "#30008"
 msgid "Timeshift"
 msgstr "Timeshift"
+
+msgctxt "#30009"
+msgid "Time Zone"
+msgstr "Time Zone"

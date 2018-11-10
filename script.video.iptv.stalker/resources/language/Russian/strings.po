@@ -23,13 +23,21 @@ msgid "Advanced"
 msgstr "Расширенные настройки"
 
 msgctxt "#30005"
+msgid "MAC Address"
+msgstr "MAC адрес"
+
+msgctxt "#30006"
 msgid "Portal hostname"
 msgstr "Адрес портала Stalker"
 
-msgctxt "#30006"
+msgctxt "#30007"
 msgid "Show adult channels"
 msgstr "Показывать каналы для взрослых"
 
-msgctxt "#30007"
+msgctxt "#30008"
 msgid "Timeshift"
 msgstr "Временной сдвиг"
+
+msgctxt "#30009"
+msgid "Time Zone"
+msgstr "Часовой пояс"

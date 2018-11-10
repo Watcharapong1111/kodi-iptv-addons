@@ -20,6 +20,8 @@
 #
 import __builtin__
 import os
+import re
+import uuid
 
 setattr(__builtin__, 'addon_id', os.path.basename(os.path.abspath(os.path.dirname(__file__))))
 
@@ -55,12 +57,19 @@ class Main(object):
             else:
                 return False
 
+        mac = addon.getSetting("mac")
+        if mac == "00:00:00:00:00:00":
+            mac = ':'.join(re.findall('..', '%012x' % uuid.getnode()))
+            addon.setSetting("mac", mac)
         hostname = addon.getSetting("hostname")
         adult = addon.getSetting("adult") == 'true' or \
                 addon.getSetting("adult") == True
         timeshift = int(addon.getSetting("timeshift"))
+        timezone = addon.getSetting("timezone")
 
         self.main_window.api = Stalker(
+            mac=mac,
+            timezone=timezone,
             hostname=hostname,
             adult=adult,
             timeshift=timeshift,
